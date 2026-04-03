@@ -1,18 +1,18 @@
 # llm-proxy
 
-A minimal OpenAI API-compatible LLM proxy.
+A minimal OpenAI API-compatible LLM proxy.  
 OpenAI API 互換の最小機能の LLM プロキシです。
 
 ## 特徴
-- Routes requests to LLM REST APIs (OpenAI API-compatible) defined in `config.json` based on the model name
+- Routes requests to LLM REST APIs (OpenAI API-compatible) defined in `config.json` based on the model name  
   モデル名を見て `config.json` に記述した LLM REST API (OpenAI API 互換) にリクエストを振り分ける
-  - Aggregates multiple cloud LLM services and distributed local LLMs (across servers/processes) into a single endpoint
+  - Aggregates multiple cloud LLM services and distributed local LLMs (across servers/processes) into a single endpoint  
     複数のクラウド LLM サービス、複数サーバやプロセスに分散したローカルLLM を 1 エンドポイントにまとめる
-  - Allows tools like OpenClaw or AI agents to use cloud LLMs without exposing API keys
+  - Allows tools like OpenClaw or AI agents to use cloud LLMs without exposing API keys  
     OpenClaw や AI エージェントに API キーを知らせずにクラウド LLM を利用させる
 - Supports streaming responses / ストリーミングに対応
 - Supports Cohere's Rerank API / Cohere の Rerank API にも対応
-- Implemented using only the Go standard library, minimizing supply chain attack risks
+- Implemented using only the Go standard library, minimizing supply chain attack risks  
   Go 標準ライブラリのみで記述されており、サプライチェーン攻撃のリスクを最小限に
 
 ## Supported APIs / 対応 API
