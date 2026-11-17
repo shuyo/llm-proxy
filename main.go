@@ -24,9 +24,9 @@ type Config struct {
 }
 
 type Route struct {
-	BaseURL     string   `json:"base_url"`
-	APIKeyEnv   string   `json:"api_key_env"`
-	Models      []string `json:"models"`
+	BaseURL   string   `json:"base_url"`
+	APIKeyEnv string   `json:"api_key_env"`
+	Models    []string `json:"models"`
 }
 
 type Gateway struct {
@@ -34,13 +34,34 @@ type Gateway struct {
 	client *http.Client
 }
 
-var endpointPathes = map[string]string{
-	"chat_completions": "/v1/chat/completions",
-	"completions": "/v1/completions",
-	"embeddings": "/v1/embeddings",
-	"rerank": "/v1/rerank",
-	"rerank_v2": "/v2/rerank",
+type apiStyle int
+
+const (
+	styleOpenAI apiStyle = iota
+	styleAnthropic
+)
+
+type endpoint struct {
+	path  string
+	style apiStyle
 }
+
+var endpoints = map[string]endpoint{
+	"chat_completions":      {"/v1/chat/completions", styleOpenAI},
+	"completions":           {"/v1/completions", styleOpenAI},
+	"embeddings":            {"/v1/embeddings", styleOpenAI},
+	"rerank":                {"/v1/rerank", styleOpenAI},
+	"rerank_v2":             {"/v2/rerank", styleOpenAI},
+	"messages":              {"/v1/messages", styleAnthropic},
+	"messages_count_tokens": {"/v1/messages/count_tokens", styleAnthropic},
+}
+
+// defaultAnthropicVersion is sent upstream when the client omits the
+// anthropic-version header (the Anthropic SDKs always send it).
+const defaultAnthropicVersion = "2023-06-01"
+
+// anthropicForwardHeaders are client headers passed through to Anthropic API upstreams.
+var anthropicForwardHeaders = []string{"anthropic-version", "anthropic-beta"}
 
 func main() {
 	configPath := flag.String("config", "./config.json", "path to config file")
@@ -69,6 +90,8 @@ func main() {
 	mux.HandleFunc("/v1/embeddings", g.wrapProxy("embeddings"))
 	mux.HandleFunc("/v1/rerank", g.wrapProxy("rerank"))
 	mux.HandleFunc("/v2/rerank", g.wrapProxy("rerank_v2"))
+	mux.HandleFunc("/v1/messages", g.wrapProxy("messages"))
+	mux.HandleFunc("/v1/messages/count_tokens", g.wrapProxy("messages_count_tokens"))
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -85,10 +108,13 @@ func main() {
 	}
 }
 
-func (g *Gateway) wrapProxy(policyName string) http.HandlerFunc {
-	path, _ := endpointPathes[policyName]
+func (g *Gateway) wrapProxy(name string) http.HandlerFunc {
+	ep, ok := endpoints[name]
+	if !ok {
+		panic("unknown endpoint: " + name)
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		g.handleOpenAIProxy(w, r, path)
+		g.handleProxy(w, r, ep)
 	}
 }
 
@@ -137,15 +163,20 @@ func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (g *Gateway) handleOpenAIProxy(w http.ResponseWriter, r *http.Request, path string) {
+func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request, ep endpoint) {
+	writeErr := errWriter(ep.style)
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		writeErr(w, http.StatusMethodNotAllowed, "invalid_request_error", "method not allowed")
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_request_error", "failed to read request body")
+		return
+	}
+	if len(body) > maxBodyBytes {
+		writeErr(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
 		return
 	}
 
@@ -164,7 +195,7 @@ func (g *Gateway) handleOpenAIProxy(w http.ResponseWriter, r *http.Request, path
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	upstreamURL, err := buildUpstreamURL(rt.BaseURL, path)
+	upstreamURL, err := buildUpstreamURL(rt.BaseURL, ep.path)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
@@ -175,7 +206,11 @@ func (g *Gateway) handleOpenAIProxy(w http.ResponseWriter, r *http.Request, path
 		return
 	}
 	upReq.Header.Set("Content-Type", "application/json")
-	applyAuthorizationHeader(upReq, r, rt)
+	if ep.style == styleAnthropic {
+		applyAnthropicHeaders(upReq, r, rt)
+	} else {
+		applyAuthorizationHeader(upReq, r, rt)
+	}
 
 	upResp, err := g.client.Do(upReq)
 	if err != nil {
@@ -216,7 +251,9 @@ func extractModelAndStream(body []byte) (string, bool, error) {
 func (g *Gateway) matchRoute(model string) (Route, error) {
 	for _, rt := range g.cfg.Routes {
 		for _, m := range rt.Models {
-			if model == m { return rt, nil }
+			if model == m {
+				return rt, nil
+			}
 		}
 	}
 
@@ -248,6 +285,31 @@ func applyAuthorizationHeader(upReq *http.Request, inbound *http.Request, rt Rou
 	}
 }
 
+// applyAnthropicHeaders sets Anthropic API style auth (x-api-key) and
+// forwards the anthropic-version / anthropic-beta headers.
+func applyAnthropicHeaders(upReq *http.Request, inbound *http.Request, rt Route) {
+	for _, h := range anthropicForwardHeaders {
+		for _, v := range inbound.Header.Values(h) {
+			upReq.Header.Add(h, v)
+		}
+	}
+	if upReq.Header.Get("anthropic-version") == "" {
+		upReq.Header.Set("anthropic-version", defaultAnthropicVersion)
+	}
+
+	if rt.APIKeyEnv != "" {
+		if key := strings.TrimSpace(os.Getenv(rt.APIKeyEnv)); key != "" {
+			upReq.Header.Set("x-api-key", key)
+			return
+		}
+	}
+	if key := strings.TrimSpace(inbound.Header.Get("x-api-key")); key != "" {
+		upReq.Header.Set("x-api-key", key)
+	} else if auth := strings.TrimSpace(inbound.Header.Get("Authorization")); auth != "" {
+		upReq.Header.Set("Authorization", auth)
+	}
+}
+
 func proxyStream(w http.ResponseWriter, upResp *http.Response) {
 	copyHeaders(w.Header(), upResp.Header)
 	w.Header().Set("Cache-Control", "no-cache")
@@ -266,7 +328,9 @@ func proxyStream(w http.ResponseWriter, upResp *http.Response) {
 			_, _ = w.Write(buf[:n])
 			flusher.Flush()
 		}
-		if err != nil { return }
+		if err != nil {
+			return
+		}
 	}
 }
 
@@ -282,6 +346,26 @@ func copyHeaders(dst, src http.Header) {
 			dst.Add(k, v)
 		}
 	}
+}
+
+type errWriterFunc func(w http.ResponseWriter, code int, typ, message string)
+
+func errWriter(style apiStyle) errWriterFunc {
+	if style == styleAnthropic {
+		return writeAnthropicErr
+	}
+	return writeErr
+}
+
+// writeAnthropicErr writes an error in the Anthropic API error format.
+func writeAnthropicErr(w http.ResponseWriter, code int, typ, message string) {
+	writeJSON(w, code, map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"type":    typ,
+			"message": message,
+		},
+	})
 }
 
 func writeErr(w http.ResponseWriter, code int, typ, message string) {

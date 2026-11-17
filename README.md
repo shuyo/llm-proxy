@@ -12,6 +12,9 @@ OpenAI API 互換の最小機能の LLM プロキシです。
     OpenClaw や AI エージェントに API キーを知らせずにクラウド LLM を利用させる
 - Supports streaming responses / ストリーミングに対応
 - Supports Cohere's Rerank API / Cohere の Rerank API にも対応
+- Supports Anthropic's Messages API (`/v1/messages`) / Anthropic の Messages API にも対応
+  - The API key in `api_key_env` is sent as the `x-api-key` header, and the client's `anthropic-version` / `anthropic-beta` headers are forwarded (`anthropic-version` defaults to `2023-06-01`)  
+    `api_key_env` の API キーは `x-api-key` ヘッダで送信し、クライアントの `anthropic-version` / `anthropic-beta` ヘッダを転送します (`anthropic-version` 省略時は `2023-06-01`)
 - Implemented using only the Go standard library, minimizing supply chain attack risks  
   Go 標準ライブラリのみで記述されており、サプライチェーン攻撃のリスクを最小限に
 
@@ -22,6 +25,8 @@ OpenAI API 互換の最小機能の LLM プロキシです。
 - `POST /v1/embeddings`
 - `POST /v1/rerank`
 - `POST /v2/rerank`
+- `POST /v1/messages` (Anthropic)
+- `POST /v1/messages/count_tokens` (Anthropic)
 
 ## Usage / 使い方
 ```bash
