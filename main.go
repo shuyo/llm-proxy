@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
-const maxBodyBytes = 4 * 1024 * 1024
+// maxBodyBytes matches the Anthropic Messages API request size limit (32 MB).
+// Claude Code sends the whole conversation (and any images/PDFs) on every
+// request, so long sessions easily exceed a few MB.
+const maxBodyBytes = 32 * 1024 * 1024
 
 type Config struct {
 	Listen string  `json:"listen"`
