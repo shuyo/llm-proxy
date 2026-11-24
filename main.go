@@ -30,11 +30,15 @@ type Route struct {
 	BaseURL   string   `json:"base_url"`
 	APIKeyEnv string   `json:"api_key_env"`
 	Models    []string `json:"models"`
+	// API is the upstream API format ("openai" or "anthropic"), used for
+	// /v1/models. Defaults to "anthropic" for api.anthropic.com, else "openai".
+	API string `json:"api"`
 }
 
 type Gateway struct {
 	cfg    Config
 	client *http.Client
+	models modelsCache
 }
 
 type apiStyle int
@@ -88,6 +92,7 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/v1/models", g.handleModels)
+	mux.HandleFunc("GET /v1/models/{id...}", g.handleModel)
 	mux.HandleFunc("/v1/chat/completions", g.wrapProxy("chat_completions"))
 	mux.HandleFunc("/v1/completions", g.wrapProxy("completions"))
 	mux.HandleFunc("/v1/embeddings", g.wrapProxy("embeddings"))
@@ -137,33 +142,6 @@ func loadConfig(path string) (Config, error) {
 		return Config{}, fmt.Errorf("routes is required")
 	}
 	return cfg, nil
-}
-
-func (g *Gateway) handleModels(w http.ResponseWriter, _ *http.Request) {
-	type modelObj struct {
-		ID     string `json:"id"`
-		Object string `json:"object"`
-	}
-	resp := struct {
-		Object string     `json:"object"`
-		Data   []modelObj `json:"data"`
-	}{
-		Object: "list",
-		Data:   make([]modelObj, 0, 8),
-	}
-
-	seen := map[string]struct{}{}
-	for _, rt := range g.cfg.Routes {
-		for _, m := range rt.Models {
-			if _, ok := seen[m]; ok {
-				continue
-			}
-			seen[m] = struct{}{}
-			resp.Data = append(resp.Data, modelObj{ID: m, Object: "model"})
-		}
-	}
-
-	writeJSON(w, http.StatusOK, resp)
 }
 
 func (g *Gateway) handleProxy(w http.ResponseWriter, r *http.Request, ep endpoint) {
